@@ -2,7 +2,7 @@ name: Daily Email Digest
 
 on:
   schedule:
-    - cron: '0 */8 * * *'  # 19:00 UTC = 8 PM WAT
+    - cron: '*/5 * * * *'  # 19:00 UTC = 8 PM WAT
 
 jobs:
   run-digest:
