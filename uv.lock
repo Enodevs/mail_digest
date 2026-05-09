@@ -417,6 +417,7 @@ dependencies = [
     { name = "imap-tools" },
     { name = "litellm" },
     { name = "python-dotenv" },
+    { name = "requests" },
     { name = "rich" },
 ]
 
@@ -425,6 +426,7 @@ requires-dist = [
     { name = "imap-tools", specifier = ">=1.11.1" },
     { name = "litellm", specifier = ">=1.82.6" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "requests", specifier = ">=2.32.0" },
     { name = "rich", specifier = ">=14.3.3" },
 ]
 

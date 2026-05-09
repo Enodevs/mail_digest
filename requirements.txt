@@ -114,7 +114,9 @@ referencing==0.37.0
 regex==2026.2.28
     # via tiktoken
 requests==2.32.5
-    # via tiktoken
+    # via
+    #   gmail-automation (pyproject.toml)
+    #   tiktoken
 rich==14.3.3
     # via
     #   gmail-automation (pyproject.toml)

@@ -2,12 +2,14 @@ import datetime
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import litellm
 import requests
 from dotenv import load_dotenv
 from imap_tools import AND, MailBox
 from litellm import completion
+from rich.console import Console
 
 load_dotenv()
 
@@ -17,17 +19,17 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# ============== MODEL CONFIGURATION ==============
 PRIMARY_MODEL = "groq/llama-3.3-70b-versatile"
 FALLBACK_MODEL = "groq/llama-3.1-8b-instant"
-# ================================================
 
 IMPORTANCE_ORDER = {"High": 3, "Medium": 2, "Low": 1}
 
+console = Console()
 
-def fetch_unread_emails(limit=5):
+
+def fetch_unread_emails(limit=6) -> list[dict]:
     if not EMAIL or not PASSWORD:
-        print("EMAIL and PASSWORD environment variables must be set.")
+        console.log("[red]EMAIL and PASSWORD environment variables must be set.[/red]")
         return []
 
     messages = []
@@ -45,15 +47,15 @@ def fetch_unread_emails(limit=5):
                         "body": mail_body.strip(),
                     }
                 )
-        print(f"Fetched {len(messages)} unread emails.")
+        console.log(f"[green]Fetched {len(messages)} unread emails.[/green]")
     except Exception as e:
-        print(f"Failed to fetch emails: {e}")
+        console.log(f"[red]Failed to fetch emails: {e}[/red]")
     return messages
 
 
-def analyze_email(email_data):
+def analyze_email(email_data: dict) -> dict:
     if not GROQ_API_KEY:
-        print("GROQ_API_KEY missing.")
+        console.log("[red]GROQ_API_KEY missing.[/red]")
         return {"summary": "N/A", "importance": "Low", "reason": "No API key"}
 
     prompt = f"""You are an expert personal assistant. Analyze this email and respond ONLY with valid JSON.
@@ -92,18 +94,20 @@ Rules:
 
                 content = response.choices[0].message.content.strip()
                 parsed = json.loads(content)
-                print(f"✅ Analyzed with {model}: {email_data['subject'][:60]}...")
+                console.log(
+                    f"[green]Analyzed with[/green] [cyan]{model}[/cyan]: {email_data['subject'][:60]}..."
+                )
                 return parsed
 
             except litellm.RateLimitError:
-                print(f"Rate limit on {model}. Switching...")
+                console.log(f"[yellow]Rate limit on {model}. Switching...[/yellow]")
                 break
             except json.JSONDecodeError:
-                print(f"JSON parse failed. Retrying...")
+                console.log("[yellow]JSON parse failed. Retrying...[/yellow]")
                 time.sleep(2)
                 continue
             except Exception as e:
-                print(f"Error with {model}: {e}")
+                console.log(f"[red]Error with {model}: {e}[/red]")
                 if attempt < 2:
                     time.sleep(3)
                     continue
@@ -112,9 +116,9 @@ Rules:
     return {"summary": "Analysis failed", "importance": "Low", "reason": "API error"}
 
 
-def send_to_telegram(summary_text):
+def send_to_telegram(summary_text: str) -> None:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram not configured.")
+        console.log("[yellow]Telegram not configured.[/yellow]")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -125,36 +129,38 @@ def send_to_telegram(summary_text):
     try:
         resp = requests.post(url, json=payload)
         if resp.status_code == 200:
-            print("✅ Digest sent to Telegram!")
+            console.log("[green]Digest sent to Telegram![/green]")
         else:
-            print(f"Telegram failed: {resp.text}")
+            console.log(f"[red]Telegram failed: {resp.text}[/red]")
     except Exception as e:
-        print(f"Telegram error: {e}")
+        console.log(f"[red]Telegram error: {e}[/red]")
 
 
-def main():
-    print("🚀 Starting Email Digest...")
-    messages = fetch_unread_emails(limit=6)
+def main() -> None:
+    console.rule("[bold blue]Daily Email Digest")
+    console.log("[blue]Starting Email Digest...[/blue]")
+    messages = fetch_unread_emails()
 
     if not messages:
-        print("No unread emails.")
+        console.log("[yellow]No unread emails.[/yellow]")
         return
 
     analyses = []
-    for email in messages:
-        analysis = analyze_email(email)
-        analyses.append(
-            {
-                "subject": email["subject"],
-                "from": email["from"],
-                "importance": analysis.get("importance", "Low"),
-                "summary": analysis.get("summary", "N/A"),
-                "reason": analysis.get("reason", "N/A"),
-            }
-        )
-        time.sleep(1.5)  # Gentle on rate limits
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_map = {executor.submit(analyze_email, email): email for email in messages}
+        for future in as_completed(future_map):
+            email = future_map[future]
+            analysis = future.result()
+            analyses.append(
+                {
+                    "subject": email["subject"],
+                    "from": email["from"],
+                    "importance": analysis.get("importance", "Low"),
+                    "summary": analysis.get("summary", "N/A"),
+                    "reason": analysis.get("reason", "N/A"),
+                }
+            )
 
-    # Build digest
     digest = (
         f"📬 *Daily Email Digest* – {datetime.date.today().strftime('%B %d, %Y')}\n\n"
     )
@@ -175,6 +181,7 @@ def main():
         digest += f"Why: {item['reason']}\n\n"
 
     send_to_telegram(digest)
+    console.rule("[bold green]Done")
 
 
 if __name__ == "__main__":
