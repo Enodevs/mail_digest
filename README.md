@@ -76,31 +76,35 @@ Run it manually, or automate it with any scheduler:
 0 8 * * * cd /path/to/gmail-automation && /path/to/.venv/bin/python main.py
 ```
 
-**GitHub Actions (`.github/workflows/digest.yml`):**
+**GitHub Actions (`.github/workflows/github-actions-demo.yml`):**
 ```yaml
 name: Daily Email Digest
+
 on:
   schedule:
-    - cron: "0 8 * * *"
-  workflow_dispatch:
+    - cron: '0 */8 * * *'
 
 jobs:
-  digest:
+  run-digest:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install -r requirements.txt
-      - run: python main.py
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Install dependencies
+        run: pip install imap-tools litellm python-dotenv requests
+      - name: Run script
         env:
           EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
 ```
+
+Store your secrets in the repo's **Settings → Secrets and variables → Actions**.
 
 Store your secrets in the repo's **Settings → Secrets and variables → Actions**.
 
