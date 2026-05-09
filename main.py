@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -18,6 +19,7 @@ PASSWORD = os.getenv("EMAIL_PASSWORD")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+IMAP_HOST = os.getenv("IMAP_HOST", "imap.gmail.com")
 
 PRIMARY_MODEL = "groq/llama-3.3-70b-versatile"
 FALLBACK_MODEL = "groq/llama-3.1-8b-instant"
@@ -27,6 +29,18 @@ IMPORTANCE_ORDER = {"High": 3, "Medium": 2, "Low": 1}
 console = Console()
 
 
+def extract_body(msg) -> str:
+    text = msg.text
+    if text:
+        return text.strip()
+    html = msg.html
+    if html:
+        clean = re.sub(r"<[^>]+>", " ", html)
+        clean = re.sub(r"\s+", " ", clean).strip()
+        return clean[:4000]
+    return ""
+
+
 def fetch_unread_emails(limit=6) -> list[dict]:
     if not EMAIL or not PASSWORD:
         console.log("[red]EMAIL and PASSWORD environment variables must be set.[/red]")
@@ -34,20 +48,19 @@ def fetch_unread_emails(limit=6) -> list[dict]:
 
     messages = []
     try:
-        with MailBox("imap.gmail.com", timeout=30).login(
-            EMAIL, PASSWORD, "INBOX"
-        ) as mailbox:
+        with MailBox(IMAP_HOST, timeout=30).login(EMAIL, PASSWORD, "INBOX") as mailbox:
             for msg in mailbox.fetch(AND(seen=False), limit=limit, reverse=True):
-                mail_body = msg.text or (msg.html or "")[:4000]
                 messages.append(
                     {
                         "subject": msg.subject or "(no subject)",
                         "from": msg.from_,
                         "date": str(msg.date),
-                        "body": mail_body.strip(),
+                        "body": extract_body(msg),
                     }
                 )
         console.log(f"[green]Fetched {len(messages)} unread emails.[/green]")
+    except (ConnectionError, TimeoutError, OSError) as e:
+        console.log(f"[red]Network error fetching emails: {e}[/red]")
     except Exception as e:
         console.log(f"[red]Failed to fetch emails: {e}[/red]")
     return messages
@@ -107,7 +120,9 @@ Rules:
                 time.sleep(2)
                 continue
             except Exception as e:
-                console.log(f"[red]Error with {model}: {e}[/red]")
+                console.log(
+                    f"[yellow]Error with {model} (attempt {attempt + 1}): {e}[/yellow]"
+                )
                 if attempt < 2:
                     time.sleep(3)
                     continue
@@ -120,25 +135,37 @@ def send_to_telegram(summary_text: str) -> None:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         console.log("[yellow]Telegram not configured.[/yellow]")
         return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": summary_text,
         "parse_mode": "Markdown",
     }
-    try:
-        resp = requests.post(url, json=payload)
-        if resp.status_code == 200:
-            console.log("[green]Digest sent to Telegram![/green]")
-        else:
-            console.log(f"[red]Telegram failed: {resp.text}[/red]")
-    except Exception as e:
-        console.log(f"[red]Telegram error: {e}[/red]")
+
+    for attempt in range(3):
+        try:
+            resp = requests.post(url, json=payload, timeout=15)
+            if resp.status_code == 200:
+                console.log("[green]Digest sent to Telegram![/green]")
+                return
+            console.log(
+                f"[yellow]Telegram attempt {attempt + 1} failed "
+                f"(HTTP {resp.status_code}): {resp.text}[/yellow]"
+            )
+        except requests.Timeout:
+            console.log(f"[yellow]Telegram attempt {attempt + 1} timed out.[/yellow]")
+        except requests.RequestException as e:
+            console.log(f"[yellow]Telegram attempt {attempt + 1} error: {e}[/yellow]")
+
+        if attempt < 2:
+            time.sleep(2**attempt)
+
+    console.log("[red]Telegram send failed after 3 attempts.[/red]")
 
 
 def main() -> None:
     console.rule("[bold blue]Daily Email Digest")
-    console.log("[blue]Starting Email Digest...[/blue]")
     messages = fetch_unread_emails()
 
     if not messages:
@@ -147,7 +174,9 @@ def main() -> None:
 
     analyses = []
     with ThreadPoolExecutor(max_workers=4) as executor:
-        future_map = {executor.submit(analyze_email, email): email for email in messages}
+        future_map = {
+            executor.submit(analyze_email, email): email for email in messages
+        }
         for future in as_completed(future_map):
             email = future_map[future]
             analysis = future.result()
