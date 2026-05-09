@@ -3,6 +3,7 @@ import json
 import os
 import time
 
+import litellm
 import requests
 from dotenv import load_dotenv
 from imap_tools import AND, MailBox
