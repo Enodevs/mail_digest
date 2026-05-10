@@ -22,8 +22,8 @@ Gmail (IMAP) → Fetch unread → LLM analysis (Groq) → Sorted digest → Tele
 ### Installation
 
 ```bash
-git clone <repo-url>
-cd gmail-automation
+git clone https://github.com/Enodevs/mail_digest
+cd mail_digest
 uv sync
 ```
 
