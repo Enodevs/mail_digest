@@ -21,8 +21,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 IMAP_HOST = os.getenv("IMAP_HOST", "imap.gmail.com")
 
-PRIMARY_MODEL = "groq/llama-3.3-70b-versatile"
-FALLBACK_MODEL = "groq/llama-3.1-8b-instant"
+PRIMARY_MODEL = "groq/openai/gpt-oss-20b"
+FALLBACK_MODEL = "groq/qwen/qwen3.6-27b"
 
 IMPORTANCE_ORDER = {"High": 3, "Medium": 2, "Low": 1}
 
