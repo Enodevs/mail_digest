@@ -5,12 +5,12 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import litellm
+import groq
 import requests
 from dotenv import load_dotenv
 from imap_tools import AND, MailBox
-from litellm import completion
 from rich.console import Console
+from groq import Groq
 
 load_dotenv()
 
@@ -21,13 +21,16 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 IMAP_HOST = os.getenv("IMAP_HOST", "imap.gmail.com")
 
-PRIMARY_MODEL = "groq/openai/gpt-oss-20b"
-FALLBACK_MODEL = "groq/qwen/qwen3.6-27b"
+PRIMARY_MODEL = "openai/gpt-oss-20b"
+FALLBACK_MODEL = "qwen/qwen3.6-27b"
 
 IMPORTANCE_ORDER = {"High": 3, "Medium": 2, "Low": 1}
 
 console = Console()
 
+client = Groq(
+    api_key=GROQ_API_KEY
+)
 
 def extract_body(msg) -> str:
     text = msg.text
@@ -71,6 +74,8 @@ def analyze_email(email_data: dict) -> dict:
         console.log("[red]GROQ_API_KEY missing.[/red]")
         return {"summary": "N/A", "importance": "Low", "reason": "No API key"}
 
+    content = ""
+
     prompt = f"""You are an expert personal assistant. Analyze this email and respond ONLY with valid JSON.
 
 Subject: {email_data["subject"]}
@@ -96,24 +101,28 @@ Rules:
     for model in models_to_try:
         for attempt in range(3):
             try:
-                response = completion(
+                response = client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
-                    api_key=GROQ_API_KEY,
                     temperature=0.3,
                     response_format={"type": "json_object"},
                     max_tokens=500,
                 )
 
-                content = response.choices[0].message.content.strip()
+                if response.choices[0].message.content:
+                    content = response.choices[0].message.content.strip()
+
                 parsed = json.loads(content)
                 console.log(
                     f"[green]Analyzed with[/green] [cyan]{model}[/cyan]: {email_data['subject'][:60]}..."
                 )
                 return parsed
 
-            except litellm.RateLimitError:
+            except groq.RateLimitError:
                 console.log(f"[yellow]Rate limit on {model}. Switching...[/yellow]")
+                break
+            except groq.NotFoundError:
+                console.log(f"[yellow]Model provided '{model}' not found. Switching...[/yellow]")
                 break
             except json.JSONDecodeError:
                 console.log("[yellow]JSON parse failed. Retrying...[/yellow]")
@@ -129,6 +138,20 @@ Rules:
                 break
 
     return {"summary": "Analysis failed", "importance": "Low", "reason": "API error"}
+
+
+def escape_md(text) -> str:
+    """Escape special characters for Telegram's legacy Markdown parse mode.
+
+    Legacy 'Markdown' (as opposed to 'MarkdownV2') only requires escaping
+    _ * [ ] and ` — but any of these appearing unbalanced in email subjects,
+    sender names, or LLM-generated summaries will break Telegram's parser
+    with 'can't find end of the entity' errors.
+    """
+    if not text:
+        return ""
+    text = str(text)
+    return re.sub(r"([_*\[\]`])", r"\\\1", text)
 
 
 def send_to_telegram(summary_text: str) -> None:
@@ -204,10 +227,10 @@ def main() -> None:
             if item["importance"] == "Medium"
             else "📬"
         )
-        digest += f"{emoji} **{item['importance']}** – {item['subject']}\n"
-        digest += f"From: {item['from']}\n"
-        digest += f"{item['summary']}\n"
-        digest += f"Why: {item['reason']}\n\n"
+        digest += f"{emoji} **{item['importance']}** – {escape_md(item['subject'])}\n"
+        digest += f"From: {escape_md(item['from'])}\n"
+        digest += f"{escape_md(item['summary'])}\n"
+        digest += f"Why: {escape_md(item['reason'])}\n\n"
 
     send_to_telegram(digest)
     console.rule("[bold green]Done")
