@@ -8,9 +8,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import groq
 import requests
 from dotenv import load_dotenv
+from groq import Groq
 from imap_tools import AND, MailBox
 from rich.console import Console
-from groq import Groq
+
+from lib.helpers import escape_md, extract_body
 
 load_dotenv()
 
@@ -28,20 +30,7 @@ IMPORTANCE_ORDER = {"High": 3, "Medium": 2, "Low": 1}
 
 console = Console()
 
-client = Groq(
-    api_key=GROQ_API_KEY
-)
-
-def extract_body(msg) -> str:
-    text = msg.text
-    if text:
-        return text.strip()
-    html = msg.html
-    if html:
-        clean = re.sub(r"<[^>]+>", " ", html)
-        clean = re.sub(r"\s+", " ", clean).strip()
-        return clean[:4000]
-    return ""
+client = Groq(api_key=GROQ_API_KEY)
 
 
 def fetch_unread_emails(limit=6) -> list[dict]:
@@ -122,7 +111,9 @@ Rules:
                 console.log(f"[yellow]Rate limit on {model}. Switching...[/yellow]")
                 break
             except groq.NotFoundError:
-                console.log(f"[yellow]Model provided '{model}' not found. Switching...[/yellow]")
+                console.log(
+                    f"[yellow]Model provided '{model}' not found. Switching...[/yellow]"
+                )
                 break
             except json.JSONDecodeError:
                 console.log("[yellow]JSON parse failed. Retrying...[/yellow]")
@@ -138,20 +129,6 @@ Rules:
                 break
 
     return {"summary": "Analysis failed", "importance": "Low", "reason": "API error"}
-
-
-def escape_md(text) -> str:
-    """Escape special characters for Telegram's legacy Markdown parse mode.
-
-    Legacy 'Markdown' (as opposed to 'MarkdownV2') only requires escaping
-    _ * [ ] and ` — but any of these appearing unbalanced in email subjects,
-    sender names, or LLM-generated summaries will break Telegram's parser
-    with 'can't find end of the entity' errors.
-    """
-    if not text:
-        return ""
-    text = str(text)
-    return re.sub(r"([_*\[\]`])", r"\\\1", text)
 
 
 def send_to_telegram(summary_text: str) -> None:
