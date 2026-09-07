@@ -1,5 +1,5 @@
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 
 # 1. Get the absolute path of the directory containing THIS file (agent/)
 # .parent gives you the 'agent/' folder.
@@ -16,6 +16,7 @@ table_creation_query = """
     )
 """
 
+
 def init_db():
     db_exists = DB_PATH.is_file()
     conn = sqlite3.connect(DB_PATH)
@@ -26,21 +27,22 @@ def init_db():
         print("Tables initialized")
     return conn, cur
 
+
 def save_message(role: str, content: str):
     conn, cur = init_db()
     try:
         cur.execute(
-            "INSERT INTO messages (role, content) VALUES (?, ?)",
-            (role, content)
+            "INSERT INTO messages (role, content) VALUES (?, ?)", (role, content)
         )
         conn.commit()
         return "Message saved"
     finally:
         conn.close()
 
+
 def get_recent_messages(limit: int = 10):
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row          # ← magic line
+    conn.row_factory = sqlite3.Row  # ← magic line
     cur = conn.cursor()
     try:
         cur.execute(
@@ -48,7 +50,7 @@ def get_recent_messages(limit: int = 10):
             "FROM messages "
             "ORDER BY created_at DESC "
             "LIMIT ?",
-            (limit,)
+            (limit,),
         )
         return [dict(row) for row in cur.fetchall()]
     finally:
