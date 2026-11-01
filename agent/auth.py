@@ -1,3 +1,6 @@
+
+import json
+import os
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -19,19 +22,44 @@ CALENDAR_SCOPES = [
 
 SCOPES = GMAIL_SCOPES + CALENDAR_SCOPES
 
+
 def get_google_credentials():
     creds = None
+    token_json = os.getenv("GOOGLE_TOKEN_JSON")
 
-    if TOKEN_FILE.is_file():
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+    if token_json:
+        creds = Credentials.from_authorized_user_info(
+            json.loads(token_json),
+            SCOPES,
+        )
+    elif TOKEN_FILE.is_file():
+        creds = Credentials.from_authorized_user_file(
+            TOKEN_FILE,
+            SCOPES,
+        )
 
     if creds and creds.valid:
         return creds
 
     if creds and creds.expired and creds.refresh_token:
         creds.refresh(Request())
-        TOKEN_FILE.write_text(creds.to_json())
+
+        if not token_json:
+            TOKEN_FILE.write_text(creds.to_json())
+
         return creds
+
+    # Browser-based OAuth is only for local development.
+    if os.getenv("RENDER"):
+        raise RuntimeError(
+            "Google credentials are missing or invalid. "
+            "Set GOOGLE_TOKEN_JSON in Render environment variables."
+        )
+
+    if not CREDENTIALS_FILE.is_file():
+        raise FileNotFoundError(
+            f"Google credentials file not found: {CREDENTIALS_FILE}"
+        )
 
     flow = InstalledAppFlow.from_client_secrets_file(
         CREDENTIALS_FILE,
@@ -39,29 +67,16 @@ def get_google_credentials():
     )
 
     creds = flow.run_local_server(port=0)
-
     TOKEN_FILE.write_text(creds.to_json())
 
     return creds
 
+
 def get_gmail_service():
     creds = get_google_credentials()
+    return build("gmail", "v1", credentials=creds)
 
-    gmail_client = build(
-        "gmail",
-        "v1",
-        credentials=creds
-    )
-
-    return gmail_client
 
 def get_calendar_service():
     creds = get_google_credentials()
-
-    calendar_client = build(
-        "calendar",
-        "v3",
-        credentials=creds
-    )
-
-    return calendar_client
+    return build("calendar", "v3", credentials=creds)
