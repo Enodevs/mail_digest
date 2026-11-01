@@ -2,7 +2,7 @@ name: Daily Email Digest
 
 on:
   schedule:
-    - cron: "0 */8 * * *"
+    - cron: "*/6 * * * *"
 
 jobs:
   run-digest:
