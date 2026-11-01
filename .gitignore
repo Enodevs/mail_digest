@@ -10,4 +10,6 @@ wheels/
 .venv
 .env
 credentials.json
+
 agent_data.db
+token.json

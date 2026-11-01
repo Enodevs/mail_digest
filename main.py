@@ -1,26 +1,28 @@
+import asyncio
 import datetime
 import json
 import os
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import discord
 import groq
-import requests
 from dotenv import load_dotenv
 from groq import Groq
 from imap_tools import AND, MailBox
 from rich.console import Console
 
-from lib.helpers import escape_md, extract_body
+from lib.helpers import extract_body
 
 load_dotenv()
 
 EMAIL = os.getenv("EMAIL_ADDRESS")
 PASSWORD = os.getenv("EMAIL_PASSWORD")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
+
 IMAP_HOST = os.getenv("IMAP_HOST", "imap.gmail.com")
 
 PRIMARY_MODEL = "openai/gpt-oss-20b"
@@ -32,6 +34,10 @@ console = Console()
 
 client = Groq(api_key=GROQ_API_KEY)
 
+discord_client = discord.Client(
+    intents=discord.Intents.none()
+)
+
 
 def fetch_unread_emails(limit=6) -> list[dict]:
     if not EMAIL or not PASSWORD:
@@ -39,9 +45,19 @@ def fetch_unread_emails(limit=6) -> list[dict]:
         return []
 
     messages = []
+
     try:
-        with MailBox(IMAP_HOST, timeout=30).login(EMAIL, PASSWORD, "INBOX") as mailbox:
-            for msg in mailbox.fetch(AND(seen=False), limit=limit, reverse=True):
+        with MailBox(IMAP_HOST, timeout=30).login(
+            EMAIL,
+            PASSWORD,
+            "INBOX"
+        ) as mailbox:
+
+            for msg in mailbox.fetch(
+                AND(seen=False),
+                limit=limit,
+                reverse=True
+            ):
                 messages.append(
                     {
                         "subject": msg.subject or "(no subject)",
@@ -50,18 +66,32 @@ def fetch_unread_emails(limit=6) -> list[dict]:
                         "body": extract_body(msg),
                     }
                 )
-        console.log(f"[green]Fetched {len(messages)} unread emails.[/green]")
+
+        console.log(
+            f"[green]Fetched {len(messages)} unread emails.[/green]"
+        )
+
     except (ConnectionError, TimeoutError, OSError) as e:
-        console.log(f"[red]Network error fetching emails: {e}[/red]")
+        console.log(
+            f"[red]Network error fetching emails: {e}[/red]"
+        )
+
     except Exception as e:
-        console.log(f"[red]Failed to fetch emails: {e}[/red]")
+        console.log(
+            f"[red]Failed to fetch emails: {e}[/red]"
+        )
+
     return messages
 
 
 def analyze_email(email_data: dict) -> dict:
     if not GROQ_API_KEY:
         console.log("[red]GROQ_API_KEY missing.[/red]")
-        return {"summary": "N/A", "importance": "Low", "reason": "No API key"}
+        return {
+            "summary": "N/A",
+            "importance": "Low",
+            "reason": "No API key",
+        }
 
     content = ""
 
@@ -92,110 +122,86 @@ Rules:
             try:
                 response = client.chat.completions.create(
                     model=model,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        }
+                    ],
                     temperature=0.3,
                     response_format={"type": "json_object"},
                     max_tokens=500,
                 )
 
                 if response.choices[0].message.content:
-                    content = response.choices[0].message.content.strip()
+                    content = (
+                        response.choices[0]
+                        .message
+                        .content
+                        .strip()
+                    )
 
                 parsed = json.loads(content)
+
                 console.log(
-                    f"[green]Analyzed with[/green] [cyan]{model}[/cyan]: {email_data['subject'][:60]}..."
+                    f"[green]Analyzed with[/green] "
+                    f"[cyan]{model}[/cyan]: "
+                    f"{email_data['subject'][:60]}..."
                 )
+
                 return parsed
 
             except groq.RateLimitError:
-                console.log(f"[yellow]Rate limit on {model}. Switching...[/yellow]")
+                console.log(
+                    f"[yellow]Rate limit on {model}. Switching...[/yellow]"
+                )
                 break
+
             except groq.NotFoundError:
                 console.log(
-                    f"[yellow]Model provided '{model}' not found. Switching...[/yellow]"
+                    f"[yellow]Model provided '{model}' not found. "
+                    f"Switching...[/yellow]"
                 )
                 break
+
             except json.JSONDecodeError:
-                console.log("[yellow]JSON parse failed. Retrying...[/yellow]")
+                console.log(
+                    "[yellow]JSON parse failed. Retrying...[/yellow]"
+                )
                 time.sleep(2)
-                continue
+
             except Exception as e:
                 console.log(
-                    f"[yellow]Error with {model} (attempt {attempt + 1}): {e}[/yellow]"
+                    f"[yellow]Error with {model} "
+                    f"(attempt {attempt + 1}): {e}[/yellow]"
                 )
+
                 if attempt < 2:
                     time.sleep(3)
                     continue
+
                 break
 
-    return {"summary": "Analysis failed", "importance": "Low", "reason": "API error"}
-
-
-def send_to_telegram(summary_text: str) -> None:
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        console.log("[yellow]Telegram not configured.[/yellow]")
-        return
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": summary_text,
-        "parse_mode": "Markdown",
+    return {
+        "summary": "Analysis failed",
+        "importance": "Low",
+        "reason": "API error",
     }
 
-    for attempt in range(3):
-        try:
-            resp = requests.post(url, json=payload, timeout=15)
-            if resp.status_code == 200:
-                console.log("[green]Digest sent to Telegram![/green]")
-                return
-            console.log(
-                f"[yellow]Telegram attempt {attempt + 1} failed "
-                f"(HTTP {resp.status_code}): {resp.text}[/yellow]"
-            )
-        except requests.Timeout:
-            console.log(f"[yellow]Telegram attempt {attempt + 1} timed out.[/yellow]")
-        except requests.RequestException as e:
-            console.log(f"[yellow]Telegram attempt {attempt + 1} error: {e}[/yellow]")
 
-        if attempt < 2:
-            time.sleep(2**attempt)
-
-    console.log("[red]Telegram send failed after 3 attempts.[/red]")
-
-
-def main() -> None:
-    console.rule("[bold blue]Daily Email Digest")
-    messages = fetch_unread_emails()
-
-    if not messages:
-        console.log("[yellow]No unread emails.[/yellow]")
-        return
-
-    analyses = []
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        future_map = {
-            executor.submit(analyze_email, email): email for email in messages
-        }
-        for future in as_completed(future_map):
-            email = future_map[future]
-            analysis = future.result()
-            analyses.append(
-                {
-                    "subject": email["subject"],
-                    "from": email["from"],
-                    "importance": analysis.get("importance", "Low"),
-                    "summary": analysis.get("summary", "N/A"),
-                    "reason": analysis.get("reason", "N/A"),
-                }
-            )
-
+def build_digest(analyses: list[dict]) -> str:
     digest = (
-        f"📬 *Daily Email Digest* – {datetime.date.today().strftime('%B %d, %Y')}\n\n"
+        f"📬 **Daily Email Digest** · "
+        f"{datetime.date.today().strftime('%B %d, %Y')}\n\n"
     )
 
     for item in sorted(
-        analyses, key=lambda x: IMPORTANCE_ORDER.get(x["importance"], 0), reverse=True
+        analyses,
+        key=lambda x: IMPORTANCE_ORDER.get(
+            x["importance"],
+            0
+        ),
+        reverse=True,
     ):
         emoji = (
             "🔥"
@@ -204,12 +210,130 @@ def main() -> None:
             if item["importance"] == "Medium"
             else "📬"
         )
-        digest += f"{emoji} **{item['importance']}** – {escape_md(item['subject'])}\n"
-        digest += f"From: {escape_md(item['from'])}\n"
-        digest += f"{escape_md(item['summary'])}\n"
-        digest += f"Why: {escape_md(item['reason'])}\n\n"
 
-    send_to_telegram(digest)
+        digest += (
+            f"{emoji} **{item['importance']}** · "
+            f"{item['subject']}\n"
+        )
+        digest += f"From: {item['from']}\n"
+        digest += f"{item['summary']}\n"
+        digest += f"Why: {item['reason']}\n\n"
+
+    return digest
+
+
+async def send_to_discord(summary_text: str) -> None:
+    if not DISCORD_BOT_TOKEN or not DISCORD_CHANNEL_ID:
+        console.log(
+            "[yellow]Discord is not configured.[/yellow]"
+        )
+        return
+
+    try:
+        channel_id = int(DISCORD_CHANNEL_ID)
+
+    except ValueError:
+        console.log(
+            "[red]DISCORD_CHANNEL_ID must be a number.[/red]"
+        )
+        return
+
+    try:
+        await discord_client.login(DISCORD_BOT_TOKEN)
+
+        channel = discord_client.get_channel(channel_id)
+
+        if channel is None:
+            channel = await discord_client.fetch_channel(channel_id)
+
+        # Discord messages have a 2000-character limit.
+        chunks = [
+            summary_text[i:i + 1900]
+            for i in range(0, len(summary_text), 1900)
+        ]
+
+        for chunk in chunks:
+            await channel.send(chunk)
+
+        console.log(
+            "[green]Digest sent to Discord![/green]"
+        )
+
+    except discord.Forbidden:
+        console.log(
+            "[red]Discord denied access to the channel. "
+            "Check the bot's permissions.[/red]"
+        )
+
+    except discord.NotFound:
+        console.log(
+            "[red]Discord channel was not found. "
+            "Check DISCORD_CHANNEL_ID.[/red]"
+        )
+
+    except discord.HTTPException as e:
+        console.log(
+            f"[red]Discord API error: {e}[/red]"
+        )
+
+    except Exception as e:
+        console.log(
+            f"[red]Failed to send Discord digest: {e}[/red]"
+        )
+
+    finally:
+        await discord_client.close()
+
+
+def main() -> None:
+    console.rule("[bold blue]Daily Email Digest")
+
+    messages = fetch_unread_emails()
+
+    if not messages:
+        console.log("[yellow]No unread emails.[/yellow]")
+        return
+
+    analyses = []
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_map = {
+            executor.submit(
+                analyze_email,
+                email
+            ): email
+            for email in messages
+        }
+
+        for future in as_completed(future_map):
+            email = future_map[future]
+            analysis = future.result()
+
+            analyses.append(
+                {
+                    "subject": email["subject"],
+                    "from": email["from"],
+                    "importance": analysis.get(
+                        "importance",
+                        "Low"
+                    ),
+                    "summary": analysis.get(
+                        "summary",
+                        "N/A"
+                    ),
+                    "reason": analysis.get(
+                        "reason",
+                        "N/A"
+                    ),
+                }
+            )
+
+    digest = build_digest(analyses)
+
+    asyncio.run(
+        send_to_discord(digest)
+    )
+
     console.rule("[bold green]Done")
 
 
