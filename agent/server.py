@@ -72,3 +72,9 @@ def run_discord_bot():
         )
 
     bot.run(DISCORD_BOT_TOKEN)
+
+async def start_discord_bot():
+    if not DISCORD_BOT_TOKEN:
+        raise ValueError("DISCORD_BOT_TOKEN is not set.")
+
+    await bot.start(DISCORD_BOT_TOKEN)
